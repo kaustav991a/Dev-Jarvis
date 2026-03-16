@@ -19,6 +19,8 @@ run_command
 read_file
 write_file
 capture_screen
+open_browser
+search_google
 
 Task: ${task}
 `;
