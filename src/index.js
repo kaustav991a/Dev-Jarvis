@@ -9,20 +9,30 @@ const rl = readline.createInterface({
   output: process.stdout,
 });
 
-console.log("Jarvis Agent Started");
+console.log("Jarvis Agent Started. Type a task...");
 
 rl.on("line", async (input) => {
-  const plan = await planTask(input);
+  if (!isSafeRequest(input)) {
+    console.log("Blocked by security policy.");
+    return;
+  }
 
-  console.log("AI plan:", plan);
+  try {
+    const plan = await planTask(input);
+    console.log("AI Plan:", plan);
 
-  const result = await execute(plan);
+    const result = await execute(plan);
+    console.log("Result:", result);
 
-  console.log("Result:", result);
+    // This updates the memory that planner.js imports
+    addMemory({
+      task: input,
+      plan: plan,
+      result: result,
+    });
 
-  addMemory({
-    task: input,
-    plan: plan,
-    result: result,
-  });
+    console.log("\nReady for next command:");
+  } catch (err) {
+    console.error("Execution Error:", err);
+  }
 });

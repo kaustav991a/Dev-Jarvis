@@ -6,6 +6,7 @@ export async function askLLM(prompt) {
       model: "llama3",
       prompt: prompt,
       stream: false,
+      format: "json", // Forces Ollama to output valid JSON
     }),
   });
 

@@ -14,6 +14,7 @@
     "@nut-tree-fork/nut-js": "^4.2.6",
     "node-fetch": "^3.3.2",
     "playwright": "^1.58.2",
-    "screenshot-desktop": "^1.15.3"
+    "screenshot-desktop": "^1.15.3",
+    "tesseract.js": "^7.0.0"
   }
 }
