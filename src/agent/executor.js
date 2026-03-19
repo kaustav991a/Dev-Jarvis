@@ -2,34 +2,48 @@ import { clickMouse } from "../tools/mouse.js";
 import { runCommand } from "../tools/terminal.js";
 import { readFile, writeFile } from "../tools/file.js";
 import { captureScreen } from "../tools/screen.js";
-import { openBrowser, searchWeb } from "../tools/browser.js";
+// import { openBrowser, searchWeb } from "../tools/browser.js";
 import { runVisionLoop } from "./visionLoop.js";
 import { clickByText } from "./textClick.js";
-import { verifyAction } from "../ai/vision.js"; // Verification Logic
+import { verifyAction } from "../ai/vision.js";
+import {
+  openBrowser,
+  analyzeWebPage,
+  clickWebElement,
+  typeWebElement,
+} from "../tools/browser.js";
 
 /* ---------------- JSON EXTRACT ---------------- */
-
 function extractJSON(text) {
-  const match = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
-  if (!match) return null;
+  if (typeof text === "object") return text;
   try {
-    return JSON.parse(match[0]);
+    const cleanText = String(text)
+      .replace(/```json/gi, "")
+      .replace(/```/g, "")
+      .trim();
+    const match = cleanText.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+
+    let parsed = JSON.parse(match ? match[0] : cleanText);
+
+    // Fix for nested task hallucinations
+    if (parsed.task && parsed.task.tool) {
+      parsed = parsed.task;
+    }
+
+    return parsed;
   } catch {
     return null;
   }
 }
 
 /* ---------------- NORMALIZE ---------------- */
-
 function normalizeAction(action) {
   if (!action) return null;
-
   if (!action.tool && action.action) action.tool = action.action;
 
   const data =
     action.data || action.arguments || action.params || action.args || {};
 
-  // Dynamic mapping to ensure "text", "url", and "goal" are always found
   action.path = action.path || data.path || data.filename;
   action.content = action.content || data.content || data.value || data.text;
   action.url = action.url || data.url;
@@ -37,7 +51,6 @@ function normalizeAction(action) {
   action.goal = action.goal || data.goal;
   action.text = action.text || data.text;
 
-  // Fix for the specific error you saw: "args": ["File"]
   if (Array.isArray(action.args) && action.args.length > 0) {
     if (!action.text) action.text = action.args[0];
     if (!action.url) action.url = action.args[0];
@@ -49,17 +62,15 @@ function normalizeAction(action) {
       .replace(/^\/+/, "")
       .trim();
   }
-
   return action;
 }
 
 /* ---------------- EXECUTE SINGLE + VERIFY ---------------- */
-
 async function executeSingle(action) {
   if (!action) return "Invalid action";
   let result = "";
 
-  // 1. Run the Tool
+  // OS & File Tools
   if (action.tool === "mouse_click") {
     result = await clickMouse();
   } else if (action.tool === "run_command") {
@@ -70,38 +81,57 @@ async function executeSingle(action) {
     result = await writeFile(action.path, action.content || "");
   } else if (action.tool === "capture_screen") {
     result = await captureScreen();
-  } else if (action.tool === "open_browser") {
+  }
+
+  // NATIVE WEB TOOLS (No OCR Required!)
+  else if (action.tool === "open_browser") {
     result = await openBrowser(action.url);
-  } else if (action.tool === "search_google") {
-    result = await searchWeb(action.query);
-  } else if (action.tool === "vision_loop") {
+  } else if (action.tool === "web_analyze") {
+    result = await analyzeWebPage();
+  } else if (action.tool === "web_click") {
+    result = await clickWebElement(action.element_id || action.id);
+  } else if (action.tool === "web_type") {
+    result = await typeWebElement(
+      action.element_id || action.id,
+      action.text || action.value,
+    );
+  }
+
+  // LEGACY OCR TOOLS (For OS-level apps like VS Code)
+  else if (action.tool === "vision_loop") {
     result = await runVisionLoop(action.goal);
   } else if (action.tool === "click_text") {
-    result = await (action.text
-      ? clickByText(action.text)
-      : "Missing text for click_text");
+    if (!action.text) return "Missing text for click_text";
+    result = await clickByText(action.text);
+
+    if (
+      result.includes("coordinates are invalid") ||
+      result.includes("Could not find") ||
+      result.includes("OCR failed")
+    ) {
+      console.log(
+        `[Jarvis] OCR failed to locate "${action.text}". Switching to Vision Fallback...`,
+      );
+      const visionResult = await runVisionLoop(
+        `Find and click the ${action.text} button or menu`,
+      );
+      result = `OCR Failed. Vision Fallback Result: ${visionResult}`;
+    }
   } else {
     return "Unknown tool: " + action.tool;
   }
 
-  // 2. The Jarvis Verification Step
-  // Only verify visual actions (clicks/browser)
-  const visualTools = [
-    "mouse_click",
-    "vision_loop",
-    "click_text",
-    "open_browser",
-  ];
+  // Verification step (Only verify OS-level visual tools now, the Web tools verify themselves)
+  const visualTools = ["mouse_click", "vision_loop", "click_text"];
   if (visualTools.includes(action.tool)) {
     console.log(`[Jarvis] Action performed. Verifying...`);
+    console.log(`[Jarvis] 📸 Taking post-action screenshot...`);
 
-    // Wait for the UI to react (menu opening, page loading)
     await new Promise((r) => setTimeout(r, 1200));
-
-    await captureScreen(); // Take a fresh screenshot of the result
-
+    const finalImgPath = await captureScreen();
+    console.log(`[Jarvis] 🧠 Asking Vision model to verify...`);
     const context = action.text || action.goal || action.url || "the action";
-    const verification = await verifyAction(context, result);
+    const verification = await verifyAction(context, result, finalImgPath);
 
     if (!verification.success) {
       return `${result}. ⚠️ VERIFICATION FAILED: ${verification.observation}`;
@@ -113,7 +143,6 @@ async function executeSingle(action) {
 }
 
 /* ---------------- MAIN EXECUTOR ---------------- */
-
 export async function execute(plan) {
   let action = extractJSON(plan);
   if (!action) return "Invalid plan from AI";

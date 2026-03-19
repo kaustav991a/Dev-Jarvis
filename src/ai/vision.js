@@ -1,11 +1,8 @@
 import fs from "fs";
 
-/**
- * Finds where to click based on a goal.
- * Used by: visionLoop.js
- */
-export async function analyzeScreen(goal = "") {
-  const image = fs.readFileSync("workspace/screen.png", { encoding: "base64" });
+export async function analyzeScreen(goal = "", imgPath) {
+  // Use the dynamic path passed from visionLoop
+  const image = fs.readFileSync(imgPath, { encoding: "base64" });
 
   const res = await fetch("http://127.0.0.1:11434/api/generate", {
     method: "POST",
@@ -36,19 +33,20 @@ export async function analyzeScreen(goal = "") {
   }
 }
 
-/**
- * Verifies if a previous action actually worked.
- * Used by: executor.js
- */
-export async function verifyAction(goal, actionTaken) {
-  const image = fs.readFileSync("workspace/screen.png", { encoding: "base64" });
+export async function verifyAction(goal, actionTaken, imgPath) {
+  // Use the dynamic path passed from executor
+  const image = fs.readFileSync(imgPath, { encoding: "base64" });
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
 
-  const res = await fetch("http://127.0.0.1:11434/api/generate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "llava",
-      prompt: `
+    const res = await fetch("http://127.0.0.1:11434/api/generate", {
+      method: "POST",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "llava",
+        prompt: `
       The user goal was: "${goal}"
       The action taken was: "${actionTaken}"
       
@@ -61,17 +59,18 @@ export async function verifyAction(goal, actionTaken) {
         "observation": "What do you see now?"
       }
       `,
-      images: [image],
-      stream: false,
-    }),
-  });
-
-  const data = await res.json();
-  try {
-    // LLava sometimes adds text before JSON, let's extract it safely
+        images: [image],
+        stream: false,
+      }),
+    });
+    clearTimeout(timeout);
+    const data = await res.json();
     const match = data.response.match(/\{[\s\S]*\}/);
     return JSON.parse(match ? match[0] : data.response);
-  } catch {
-    return { success: false, observation: "Could not verify screen state." };
+  } catch (err) {
+    return {
+      success: false,
+      observation: "Vision verification timed out or failed.",
+    };
   }
 }
